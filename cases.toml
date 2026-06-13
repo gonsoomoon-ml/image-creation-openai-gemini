@@ -1,0 +1,19 @@
+# 테스트 케이스 메니페스트 (generate_sample.py / make_montage.py 가 읽음)
+# 각 [[case]] = 한 작업. id 는 outputs/<id>/ 폴더 이름이 되므로 파일시스템 안전 문자만, 중복 금지.
+#   type   = "edit" (입력 이미지 필요) | "generate" (텍스트만)
+#   image  = 입력 이미지 경로(루트 기준). edit 필수 / generate 생략
+#   models = 돌릴 모델 ID 목록(생략 시 기본 3종 전부). 비용 줄이려면 일부만.
+
+[[case]]
+id = "cat-fullbody"
+type = "edit"
+image = "test_data/cat-scratch.png"
+prompt = "A full-body cute cat based on this simple smiling cat sketch. High-resolution."
+
+# 새 이미지 케이스 예시 — 프롬프트를 실제 값으로 채우고 주석을 해제하세요.
+# [[case]]
+# id = "woman-book-edit"
+# type = "edit"
+# image = "test_data/woman-masking-book.jpg"
+# prompt = "<여기에 편집 프롬프트>"
+# models = ["gemini-3.1-flash-image"]   # 예: 비용 줄이려고 한 모델만
