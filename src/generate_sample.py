@@ -1,23 +1,23 @@
-"""세 모델 이미지 편집(image-to-image) + 토큰 사용량/비용 비교 샘플.
+"""세 모델 이미지 생성/편집(generate·edit) + 토큰 사용량/비용 비교.
 
-대상 모델 (design/research_models_api.md 의 핵심 테스트 세트):
-  - OpenAI: gpt-image-2          (client.images.edit)
-  - Gemini: gemini-3-pro-image (Pro), gemini-3.1-flash-image (Flash)  (generate_content)
-
-입력 스케치 한 장(test_data/cat-scratch.png)과 동일 프롬프트로 세 모델에서
-이미지를 편집/생성하고, 응답의 토큰 사용량을 읽어 예상 비용(USD)을 계산해
-표로 출력합니다. 결과 이미지는 outputs/ 에 저장됩니다.
+cases.toml 에 정의된 테스트 케이스를 읽어, 각 케이스를 지정 모델들로 실행하고
+응답의 토큰 사용량으로 예상 비용(USD)을 계산해 표로 출력한다.
+결과 이미지/사용량은 outputs/<case-id>/ 아래에 저장된다.
 
 실행:
     uv sync
-    cp .env.example .env          # 그리고 실제 API 키 입력
-    uv run python src/generate_sample.py
+    cp .env.example .env                              # 그리고 실제 API 키 입력
+    uv run python src/generate_sample.py             # 모든 케이스
+    uv run python src/generate_sample.py cat-fullbody  # 한 케이스만
+    uv run python src/generate_sample.py --list      # 케이스 목록만 (API 호출 없음)
 """
 from __future__ import annotations
 
 import base64
 import json
 import os
+import sys
+import tomllib
 from io import BytesIO
 from pathlib import Path
 
@@ -30,23 +30,26 @@ from PIL import Image
 # --- 경로 / 환경 ---
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = PROJECT_ROOT / "outputs"
+CASES_FILE = PROJECT_ROOT / "cases.toml"
 load_dotenv(PROJECT_ROOT / ".env")
-
-# 입력 스케치를 바탕으로 한 이미지 편집(image-to-image) — 세 모델 동일 입력/프롬프트
-PROMPT = "A full-body cute cat based on this simple smiling cat sketch. High-resolution."
-INPUT_IMAGE = PROJECT_ROOT / "test_data" / "cat-scratch.png"
 
 # 모델 ID 는 .env 에서 읽고, 미설정 시 검증된 기본값(핵심 테스트 세트)을 사용
 OPENAI_IMAGE_MODEL = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2")
 GEMINI_PRO_IMAGE_MODEL = os.getenv("GEMINI_PRO_IMAGE_MODEL", "gemini-3-pro-image")
 GEMINI_FLASH_IMAGE_MODEL = os.getenv("GEMINI_FLASH_IMAGE_MODEL", "gemini-3.1-flash-image")
 
-# --- 가격표 (USD, 2026-06 기준; design/research_models_api.md 참고) ---
-# OpenAI: 100만 토큰당 단가. gpt-image-2 는 별도 text-out 단가가 없어 0 으로 둔다.
+# 케이스에 models 미지정 시 쓰는 기본 세트, 그리고 모델→제공자 매핑
+DEFAULT_MODELS = [OPENAI_IMAGE_MODEL, GEMINI_PRO_IMAGE_MODEL, GEMINI_FLASH_IMAGE_MODEL]
+MODEL_PROVIDER = {
+    OPENAI_IMAGE_MODEL: "openai",
+    GEMINI_PRO_IMAGE_MODEL: "gemini",
+    GEMINI_FLASH_IMAGE_MODEL: "gemini",
+}
+
+# --- 가격표 (USD, per 1M tokens; design/research_models_api.md 참고) ---
 OPENAI_RATES = {
     "gpt-image-2": {"text_in": 5.0, "image_in": 8.0, "image_out": 30.0, "text_out": 0.0},
 }
-# Gemini: 100만 토큰당 단가 (input = prompt, image_out = candidates 의 IMAGE 토큰)
 GEMINI_RATES = {
     "gemini-3-pro-image": {"input": 2.0, "image_out": 120.0},
     "gemini-3.1-flash-image": {"input": 0.5, "image_out": 60.0},
@@ -71,43 +74,71 @@ def _fmt_cost(cost: float | None) -> str:
 
 
 def _load_input_rgb(path: Path) -> Image.Image:
-    """입력 이미지를 RGB(흰 배경 합성)로 로드. 편집 시 alpha 채널이 마스크로 오인되는 것 방지."""
+    """입력 이미지를 RGB(흰 배경 합성)로 로드. 편집 시 alpha 가 마스크로 오인되는 것 방지."""
     im = Image.open(path).convert("RGBA")
     bg = Image.new("RGB", im.size, "white")
     bg.paste(im, mask=im.split()[3])
     return bg
 
 
-def generate_openai(model: str) -> dict:
-    """OpenAI 이미지 편집(images.edit). 입력 스케치 + 프롬프트 → 새 이미지. 응답은 base64."""
+def load_cases() -> list[dict]:
+    """cases.toml 을 읽어 케이스 목록을 반환. 기본 검증 포함(호출 전 fail-fast)."""
+    if not CASES_FILE.exists():
+        raise FileNotFoundError(f"{CASES_FILE} 가 없습니다. cases.toml 을 만들어 주세요.")
+    cases = tomllib.loads(CASES_FILE.read_text(encoding="utf-8")).get("case", [])
+    seen: set[str] = set()
+    for c in cases:
+        cid = c.get("id")
+        if not cid:
+            raise ValueError("각 [[case]] 에는 id 가 필요합니다.")
+        if cid in seen:
+            raise ValueError(f"중복된 case id: {cid}")
+        seen.add(cid)
+        if c.get("type") not in ("edit", "generate"):
+            raise ValueError(f"[{cid}] type 은 'edit' 또는 'generate' 여야 합니다.")
+        if not c.get("prompt"):
+            raise ValueError(f"[{cid}] prompt 가 필요합니다.")
+        if c["type"] == "edit" and not c.get("image"):
+            raise ValueError(f"[{cid}] edit 케이스에는 image 가 필요합니다.")
+        for m in c.get("models", DEFAULT_MODELS):
+            if m not in MODEL_PROVIDER:
+                raise ValueError(
+                    f"[{cid}] 알 수 없는 모델 '{m}'. 사용 가능: {list(MODEL_PROVIDER)}"
+                )
+    return cases
+
+
+def generate_openai(model: str, prompt: str, image_path: Path | None, out_dir: Path) -> dict:
+    """OpenAI 이미지. image_path 있으면 편집(images.edit), 없으면 생성(images.generate). 응답은 base64."""
     client = OpenAI(api_key=_get_key("OPENAI_API_KEY"))
-    buf = BytesIO()
-    _load_input_rgb(INPUT_IMAGE).save(buf, format="png")
-    buf.name = "input.png"   # SDK 가 파일명/MIME 을 추론하도록
-    buf.seek(0)
-    resp = client.images.edit(
-        model=model,
-        image=buf,
-        prompt=PROMPT,
-        size="1024x1024",   # gpt-image-2: 1024x1024 / 1536x1024 / 1024x1536 / auto
-        quality="high",     # low | medium | high | auto
-        # 주의: gpt-image-2 에는 input_fidelity 를 쓰지 말 것
-    )
-    out_path = OUT_DIR / f"{model}.png"
+    if image_path is not None:
+        buf = BytesIO()
+        _load_input_rgb(image_path).save(buf, format="png")
+        buf.name = "input.png"   # SDK 가 파일명/MIME 추론하도록
+        buf.seek(0)
+        resp = client.images.edit(
+            model=model, image=buf, prompt=prompt,
+            size="1024x1024",   # gpt-image-2: 1024x1024 / 1536x1024 / 1024x1536 / auto
+            quality="high",     # low | medium | high | auto
+            # 주의: gpt-image-2 에는 input_fidelity 를 쓰지 말 것
+        )
+    else:
+        resp = client.images.generate(
+            model=model, prompt=prompt, size="1024x1024", quality="high",
+        )
+    out_path = out_dir / f"{model}.png"
     out_path.write_bytes(base64.b64decode(resp.data[0].b64_json))
 
     u = resp.usage  # GPT image 모델에만 존재
-    # 출력 토큰을 이미지/텍스트로 분리 (스키마 미보장 → getattr 로 방어적 접근)
     out_det = getattr(u, "output_tokens_details", None)
     image_out = getattr(out_det, "image_tokens", None) if out_det else None
     text_out = getattr(out_det, "text_tokens", 0) if out_det else 0
     if image_out is None:
-        image_out, text_out = u.output_tokens, 0  # 상세가 없으면 전부 이미지로 근사
+        image_out, text_out = u.output_tokens, 0  # 상세 없으면 전부 이미지로 근사
     in_det = getattr(u, "input_tokens_details", None)
     text_in = getattr(in_det, "text_tokens", u.input_tokens) if in_det else u.input_tokens
     image_in = getattr(in_det, "image_tokens", 0) if in_det else 0
 
-    # 단가표에 없는 모델(env 로 교체한 경우)은 비용을 None 으로 둔다
     r = OPENAI_RATES.get(model)
     cost = None
     if r is not None:
@@ -132,18 +163,19 @@ def generate_openai(model: str) -> dict:
     }
 
 
-def generate_gemini(model: str) -> dict:
-    """Gemini 이미지 편집 (generate_content). 프롬프트 + 입력 스케치를 contents 로 전달."""
+def generate_gemini(model: str, prompt: str, image_path: Path | None, out_dir: Path) -> dict:
+    """Gemini 이미지. image_path 있으면 편집(프롬프트+이미지), 없으면 생성(프롬프트만)."""
     client = genai.Client(api_key=_get_key("GOOGLE_API_KEY", "GEMINI_API_KEY"))
+    contents = [prompt] if image_path is None else [prompt, _load_input_rgb(image_path)]
     resp = client.models.generate_content(
         model=model,
-        contents=[PROMPT, _load_input_rgb(INPUT_IMAGE)],
+        contents=contents,
         config=types.GenerateContentConfig(
             response_modalities=["TEXT", "IMAGE"],
             image_config=types.ImageConfig(aspect_ratio="1:1", image_size="1K"),
         ),
     )
-    out_path = OUT_DIR / f"{model}.png"
+    out_path = out_dir / f"{model}.png"
     for part in resp.parts:
         if part.inline_data is not None:
             Image.open(BytesIO(part.inline_data.data)).save(out_path)
@@ -152,14 +184,13 @@ def generate_gemini(model: str) -> dict:
     um = resp.usage_metadata
     prompt_tokens = um.prompt_token_count or 0
     cand_tokens = um.candidates_token_count or 0
-    # candidates 중 IMAGE 모달리티 토큰만 추출 (상세가 없으면 candidates 전체로 근사)
+    # candidates 중 IMAGE 모달리티 토큰만 (상세 없으면 candidates 전체로 근사)
     image_out_tokens = cand_tokens
     for d in getattr(um, "candidates_tokens_details", None) or []:
         mod = getattr(d, "modality", None)
         if getattr(mod, "name", str(mod)) == "IMAGE":
             image_out_tokens = d.token_count
 
-    # 단가표에 없는 모델(env 로 교체한 경우)은 비용을 None 으로 둔다
     r = GEMINI_RATES.get(model)
     cost = None
     if r is not None:
@@ -175,40 +206,74 @@ def generate_gemini(model: str) -> dict:
     }
 
 
-# 핵심 테스트 세트: (모델 ID, 호출 함수)
-CALLS = [
-    ("gpt-image-2", generate_openai),
-    ("gemini-3-pro-image", generate_gemini),
-    ("gemini-3.1-flash-image", generate_gemini),
-]
+PROVIDERS = {"openai": generate_openai, "gemini": generate_gemini}
+
+
+def _run_case(case: dict) -> list[dict]:
+    """한 케이스를 모델별로 실행하고 결과 목록을 반환. outputs/<id>/usage.json 저장."""
+    cid = case["id"]
+    out_dir = OUT_DIR / cid
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    image_path = None
+    if case["type"] == "edit":
+        image_path = PROJECT_ROOT / case["image"]
+        if not image_path.exists():
+            print(f"  [건너뜀] {cid}: 입력 이미지 없음 {image_path}")
+            return []
+
+    results = []
+    for model in case.get("models", DEFAULT_MODELS):
+        fn = PROVIDERS[MODEL_PROVIDER[model]]
+        print(f"  [{case['type']}] {cid} · {model} ...")
+        try:
+            res = fn(model, case["prompt"], image_path, out_dir)
+            results.append(res)
+            print(f"    → {res['path']}  (예상 비용 {_fmt_cost(res['est_cost_usd'])})")
+        except Exception as e:  # noqa: BLE001 - 샘플이므로 셀 단위 실패 격리
+            print(f"    [건너뜀] {model}: {e}")
+
+    if results:
+        (out_dir / "usage.json").write_text(
+            json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    return results
 
 
 def main() -> None:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    results = []
-    for model, fn in CALLS:
-        print(f"[편집 중] {model} ...")
-        try:
-            res = fn(model)
-            results.append(res)
-            print(f"  → 저장: {res['path']}  (예상 비용 {_fmt_cost(res['est_cost_usd'])})")
-        except Exception as e:  # noqa: BLE001 - 샘플이므로 모델 단위로 실패를 격리
-            print(f"  [건너뜀] {model}: {e}")
+    args = sys.argv[1:]
+    cases = load_cases()
 
-    if not results:
-        print("\n생성된 결과가 없습니다. .env 의 API 키 설정을 확인하세요.")
+    if "--list" in args:
+        print("사용 가능한 케이스:")
+        for c in cases:
+            n = len(c.get("models", DEFAULT_MODELS))
+            print(f"  - {c['id']:20} [{c['type']:8}] 모델 {n}종")
         return
 
-    # 비교 표 출력
-    print(f"\n{'model':28}{'total_tokens':>14}{'est_cost_usd':>16}")
-    print("-" * 58)
-    for r in results:
-        print(f"{r['model']:28}{r['total_tokens']:>14}{_fmt_cost(r['est_cost_usd']):>16}")
+    wanted = [a for a in args if not a.startswith("-")]
+    if wanted:
+        ids = {c["id"] for c in cases}
+        for w in wanted:
+            if w not in ids:
+                print(f"알 수 없는 케이스: {w} (사용 가능: {sorted(ids)})")
+                return
+        cases = [c for c in cases if c["id"] in wanted]
 
-    # 원시 결과를 JSON 으로 저장 (루트 .gitignore 가 *.json 제외 → 추적하려면 git add -f)
-    usage_path = OUT_DIR / "usage.json"
-    usage_path.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
-    print(f"\n사용량/비용 상세 저장: {usage_path.relative_to(PROJECT_ROOT)}")
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    rows: list[tuple[str, dict]] = []
+    for case in cases:
+        print(f"[케이스] {case['id']}")
+        rows.extend((case["id"], r) for r in _run_case(case))
+
+    if not rows:
+        print("\n생성된 결과가 없습니다. .env 의 API 키/케이스 설정을 확인하세요.")
+        return
+
+    print(f"\n{'case':20}{'model':28}{'total_tokens':>14}{'est_cost_usd':>16}")
+    print("-" * 78)
+    for cid, r in rows:
+        print(f"{cid:20}{r['model']:28}{r['total_tokens']:>14}{_fmt_cost(r['est_cost_usd']):>16}")
 
 
 if __name__ == "__main__":
