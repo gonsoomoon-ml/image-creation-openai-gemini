@@ -2,7 +2,7 @@
   {
     "provider": "openai",
     "model": "gpt-image-2",
-    "path": "outputs/gpt-image-2.png",
+    "path": "outputs/cat-fullbody/gpt-image-2.png",
     "input_tokens": 401,
     "output_tokens": 7024,
     "total_tokens": 7425,
@@ -11,7 +11,7 @@
   {
     "provider": "gemini",
     "model": "gemini-3-pro-image",
-    "path": "outputs/gemini-3-pro-image.png",
+    "path": "outputs/cat-fullbody/gemini-3-pro-image.png",
     "prompt_tokens": 277,
     "candidates_tokens": 1246,
     "total_tokens": 1629,
@@ -20,7 +20,7 @@
   {
     "provider": "gemini",
     "model": "gemini-3.1-flash-image",
-    "path": "outputs/gemini-3.1-flash-image.png",
+    "path": "outputs/cat-fullbody/gemini-3.1-flash-image.png",
     "prompt_tokens": 277,
     "candidates_tokens": 1410,
     "total_tokens": 1687,
