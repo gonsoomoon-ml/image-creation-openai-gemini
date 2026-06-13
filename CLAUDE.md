@@ -11,15 +11,16 @@ The maintainer (Gonsoo Moon) works in Korean — see **Writing language** below.
 ## Layout
 
 ```
+cases.toml             # 테스트 케이스 메니페스트 (tomllib 로 로드)
 src/
-  generate_sample.py   # 3-model image EDIT (image-to-image) + token→cost
-  make_montage.py      # comparison montage (input sketch + prompt + 3 results → 1 png)
-test_data/cat-scratch.png   # input sketch
-outputs/                # results + montage.png + usage.json (created on run; *.png committed)
-design/                 # prd.md (source of truth, Korean) + research_models_api.md (model/pricing research)
-README.md               # beginner-friendly cost-calculation walkthrough (Korean)
-.env.example            # API keys + model-ID template
-pyproject.toml          # uv project (package = false)
+  generate_sample.py   # cases.toml 구동: 케이스×모델 generate/edit + token→cost
+  make_montage.py      # 케이스별 montage (input + N model results → 1 png)
+test_data/             # 입력 이미지들 (cat-scratch.png, woman-masking-book.jpg)
+outputs/<case-id>/     # per-case: {model}.png + usage.json + montage.png (created on run; committed)
+design/                # prd.md (source of truth) + research_models_api.md + superpowers specs/plans
+README.md              # beginner-friendly cost-calculation walkthrough (Korean)
+.env.example           # API keys + model-ID template
+pyproject.toml         # uv project (package = false)
 ```
 
 **Read `design/prd.md` first** — it is the source of truth (Korean).
@@ -35,7 +36,7 @@ Compare image work across the **OpenAI** and **Google Gemini** APIs:
 
 Note on (4): the two APIs report usage in different shapes (OpenAI → `usage`; Gemini → `usage_metadata`) and bill on different units. Reconciling them is *the* deliverable. Neither API returns a dollar amount — cost is computed client-side from tokens × rates. `src/generate_sample.py` does this.
 
-Current state: `generate_sample.py` runs the **edit** path (image input). Switching to plain generation = drop the input image (`client.images.generate` / `generate_content` with text only).
+Current state: cases are defined in `cases.toml` (`type = "edit" | "generate"`); `generate_sample.py` runs every case × its models. **edit** sends the input image; **generate** is text-only (no image). Outputs are isolated per case under `outputs/<case-id>/`.
 
 ## Writing language
 
@@ -52,11 +53,13 @@ Write **Korean-friendly** content so the maintainer reads it naturally:
 Uses **`uv`**. Deps (verified mid-2026): `openai>=2.0.0`, `google-genai>=1.0.0` (the unified Gemini SDK — **not** legacy `google-generativeai`), `python-dotenv>=1.0.0`, `pillow>=11.0.0`. `requires-python = ">=3.11"`; non-package project (`[tool.uv] package = false`).
 
 ```bash
-uv sync                              # create .venv and install deps
-cp .env.example .env                 # then fill in OPENAI_API_KEY + GOOGLE_API_KEY
-uv run python src/generate_sample.py # edit with all 3 models + print usage/cost → outputs/
-uv run python src/make_montage.py    # build outputs/montage.png
-uv add <package>                     # add a dependency
+uv sync                                            # create .venv and install deps
+cp .env.example .env                               # then fill in OPENAI_API_KEY + GOOGLE_API_KEY
+uv run python src/generate_sample.py --list        # list cases (no API calls)
+uv run python src/generate_sample.py               # run ALL cases × models + cost table
+uv run python src/generate_sample.py <case-id>     # run a single case (saves money)
+uv run python src/make_montage.py                  # build per-case outputs/<id>/montage.png
+uv add <package>                                   # add a dependency
 ```
 
 ## `.env` (keys + model IDs)
@@ -92,4 +95,4 @@ Prices re-verified against official pages (2026-06-13). Real edit-run costs: `gp
 
 ## `.gitignore` / outputs
 
-This repo's own `.gitignore` excludes `.env`, `.venv/`, `__pycache__/`, `.claude/`. Generated `outputs/*.png` and `outputs/usage.json` **are** tracked (README embeds `outputs/montage.png`). The real-key `.env` is intentionally never committed.
+This repo's own `.gitignore` excludes `.env`, `.venv/`, `__pycache__/`, `.claude/`. Generated per-case `outputs/<case-id>/*.png` and `outputs/<case-id>/usage.json` **are** tracked (README embeds `outputs/cat-fullbody/montage.png`). The real-key `.env` is intentionally never committed.

@@ -16,7 +16,7 @@ OpenAI와 Google Gemini 이미지 모델로 **이미지 생성·편집(image-to-
 
 ## 비교 결과 (스케치 → full-body 고양이 편집)
 
-![입력 스케치 + 프롬프트 + 세 모델 결과 비교 몽타주](outputs/montage.png)
+![고양이 케이스 비교 몽타주](outputs/cat-fullbody/montage.png)
 
 | 모델 | 입력 토큰 | 출력 토큰 | 합계 | 실제 비용 | 결과 스타일 |
 |---|---|---|---|---|---|
@@ -31,13 +31,15 @@ OpenAI와 Google Gemini 이미지 모델로 **이미지 생성·편집(image-to-
 ## 빠른 시작
 
 ```bash
-uv sync                               # 의존성 설치
-cp .env.example .env                  # OPENAI_API_KEY, GOOGLE_API_KEY 입력
-uv run python src/generate_sample.py  # 3개 모델로 편집 + 비용 표 출력
-uv run python src/make_montage.py     # 위 비교 몽타주(outputs/montage.png) 생성
+uv sync                                       # 의존성 설치
+cp .env.example .env                          # OPENAI_API_KEY, GOOGLE_API_KEY 입력
+uv run python src/generate_sample.py --list   # 케이스 목록 (API 호출 없음)
+uv run python src/generate_sample.py          # 모든 케이스 × 3개 모델 + 비용 표
+uv run python src/generate_sample.py cat-fullbody  # 한 케이스만 (비용 절약)
+uv run python src/make_montage.py             # 케이스별 비교 뫽타주 생성
 ```
 
-입력 이미지·프롬프트는 `src/generate_sample.py` 상단의 `INPUT_IMAGE`, `PROMPT`에서 바꿉니다.
+테스트 케이스(입력 이미지·프롬프트·모델)는 루트 `cases.toml` 에서 추가/수정합니다. `id` 가 `outputs/<id>/` 폴더 이름이 됩니다.
 
 > ⚠️ Gemini 이미지 모델은 **무료 티어가 없습니다** — Google AI Studio에서 결제(유료 티어)를 활성화해야 동작합니다.
 
@@ -100,18 +102,19 @@ uv run python src/make_montage.py     # 위 비교 몽타주(outputs/montage.png
 ## 폴더 구조
 ```
 .
+├── cases.toml                 # 테스트 케이스 메니페스트 (id/type/image/prompt/models)
 ├── src/
-│   ├── generate_sample.py     # 3개 모델 편집 + 토큰→비용 계산
-│   └── make_montage.py        # 비교 몽타주 생성
-├── test_data/
-│   └── cat-scratch.png        # 입력 스케치
-├── outputs/                   # 결과 이미지 + montage.png + usage.json (실행 시 생성)
-├── design/                    # PRD + 모델/가격 리서치 문서
+│   ├── generate_sample.py     # 케이스 로드 → 케이스×모델 실행 + 토큰→비용 계산
+│   └── make_montage.py        # 케이스별 비교 뫽타주 생성
+├── test_data/                 # 입력 이미지들 (cat-scratch.png, woman-masking-book.jpg …)
+├── outputs/
+│   └── <case-id>/             # 케이스별 결과 png + usage.json + montage.png (실행 시 생성)
+├── design/                    # PRD + 모델/가격 리서치 + specs/plans
 ├── .env.example               # API 키 + 모델 ID 템플릿
 └── pyproject.toml
 ```
 
-> `outputs/usage.json`은 루트 `.gitignore`의 `*.json` 규칙 때문에 git 추적에서 제외됩니다 (추적하려면 `git add -f`). 결과 `*.png`는 추적됩니다.
+> 결과 `*.png` 와 `outputs/<case-id>/usage.json` 은 git 에 추적됩니다 (README 가 뫽타주를 임베드). 이 저장소 `.gitignore` 에는 `*.json` 규칙이 없습니다.
 
 ---
 
