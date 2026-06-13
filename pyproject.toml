@@ -1,0 +1,14 @@
+[project]
+name = "image-creation-openai-gemini"
+version = "0.1.0"
+description = "OpenAI(gpt-image-2) vs Gemini(gemini-3-pro-image, gemini-3.1-flash-image) 이미지 생성/편집 및 토큰 비용 비교 (lab/28)"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=2.0.0",         # GPT Image (client.images.generate / .edit)
+    "google-genai>=1.0.0",   # 통합 Gemini SDK: from google import genai
+    "python-dotenv>=1.0.0",  # .env 로드
+    "pillow>=11.0.0",        # PIL: 이미지 입출력
+]
+
+[tool.uv]
+package = false   # 패키지가 아닌 스크립트 실행용 프로젝트 (의존성만 설치)

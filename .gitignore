@@ -1,0 +1,10 @@
+# Secrets — 절대 커밋 금지 (실제 API 키)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Claude 로컬 설정
+.claude/
