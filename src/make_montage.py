@@ -1,7 +1,9 @@
-"""케이스별 비교 뫽타주 생성.
+"""케이스별 비교 뫽타주 생성 (2단 레이아웃).
 
-cases.toml 의 각 케이스에 대해 outputs/<id>/{model}.png 와 outputs/<id>/usage.json 을 읽어
-[입력(편집 시) | 모델별 결과] 한 줄과 상단 프롬프트 배너를 그려 outputs/<id>/montage.png 로 저장.
+각 케이스의 outputs/<id>/usage.json 과 결과 png 를 읽어, 패널을 두 줄로 배치한다:
+  - 윗줄: (편집이면 입력 +) OpenAI gpt-image-2 의 quality 변형들(low/medium/high)
+  - 아랫줄: Gemini 모델들
+상단에는 제목/프롬프트 배너, 각 패널 아래에는 비용·토큰·소요시간 캡션을 단다.
 
 실행:
     uv run python src/make_montage.py              # 모든 케이스
@@ -23,12 +25,14 @@ OUT_DIR = PROJECT_ROOT / "outputs"
 CASES_FILE = PROJECT_ROOT / "cases.toml"
 load_dotenv(PROJECT_ROOT / ".env")
 
-# generate_sample.py 와 동일한 기본 모델 세트(케이스에 models 미지정 시 열로 표시)
+OPENAI_MODEL = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2")
+# 케이스에 models 미지정 시(미실행 케이스 placeholder 용) 기본 모델 세트
 DEFAULT_MODELS = [
-    os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-2"),
+    OPENAI_MODEL,
     os.getenv("GEMINI_PRO_IMAGE_MODEL", "gemini-3-pro-image"),
     os.getenv("GEMINI_FLASH_IMAGE_MODEL", "gemini-3.1-flash-image"),
 ]
+QUALITY_ORDER = {"low": 0, "medium": 1, "high": 2}
 
 # 한글+라틴을 한 폰트로 렌더링 (tofu 방지)
 NANUM = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
@@ -88,37 +92,70 @@ def load_cases() -> list[dict]:
     return tomllib.loads(CASES_FILE.read_text(encoding="utf-8")).get("case", [])
 
 
+def _provider_of(row: dict) -> str:
+    return row.get("provider") or ("openai" if row["model"].startswith("gpt") else "gemini")
+
+
+def _quality_of(row: dict) -> str | None:
+    """결과의 quality 를 반환. 명시 필드 없으면 라벨 접미사로, 그래도 없으면 OpenAI 는 high 로 추정."""
+    if row.get("quality"):
+        return row["quality"]
+    for q in QUALITY_ORDER:
+        if row["model"].endswith(f"-{q}"):
+            return q
+    return "high" if _provider_of(row) == "openai" else None
+
+
+def _label_of(row: dict) -> str:
+    if _provider_of(row) == "openai":
+        return f"{OPENAI_MODEL} ({_quality_of(row)})"
+    return row["model"]
+
+
+def _caption_of(row: dict) -> str:
+    if row.get("est_cost_usd") is None:
+        return "비용 정보 없음"
+    s = f"${row['est_cost_usd']:.4f} · {row['total_tokens']:,} tok"
+    if row.get("elapsed_sec") is not None:
+        s += f" · {row['elapsed_sec']:.1f}s"
+    return s
+
+
 def build_montage(case: dict) -> None:
     cid = case["id"]
     case_dir = OUT_DIR / cid
     case_dir.mkdir(parents=True, exist_ok=True)
-    models = case.get("models", DEFAULT_MODELS)
 
-    # usage.json(있으면) 로드 → 모델별 비용/토큰 캡션
-    usage = {}
+    # usage.json 의 각 행 = 한 결과 패널. 없으면(미실행) models 로 placeholder 행 구성.
     usage_path = case_dir / "usage.json"
     if usage_path.exists():
-        for row in json.loads(usage_path.read_text(encoding="utf-8")):
-            usage[row["model"]] = row
+        rows = json.loads(usage_path.read_text(encoding="utf-8"))
+    else:
+        rows = [{"model": m} for m in case.get("models", DEFAULT_MODELS)]
 
-    def sub_for(model: str) -> str:
-        u = usage.get(model)
-        if not u or u.get("est_cost_usd") is None:
-            return "비용 정보 없음"
-        return f"${u['est_cost_usd']:.4f} · {u['total_tokens']:,} tok"
+    openai_rows = sorted(
+        [r for r in rows if _provider_of(r) == "openai"],
+        key=lambda r: QUALITY_ORDER.get(_quality_of(r), 9),
+    )
+    gemini_rows = [r for r in rows if _provider_of(r) == "gemini"]
 
-    # 패널: 편집이면 입력 1장 + 모델들, 생성이면 모델들만
-    panels = []
+    def panel(r: dict) -> tuple[Path, str, str]:
+        return (case_dir / f"{r['model']}.png", _label_of(r), _caption_of(r))
+
+    # 윗줄: (편집이면 입력 +) OpenAI quality 변형들 / 아랫줄: Gemini 모델들
+    top: list[tuple[Path, str, str]] = []
     if case["type"] == "edit":
         img = PROJECT_ROOT / case["image"]
         iw, ih = Image.open(img).size if img.exists() else (0, 0)
-        panels.append((img, "입력 (INPUT)", f"{iw}×{ih} · input"))
-    for m in models:
-        panels.append((case_dir / f"{m}.png", m, sub_for(m)))
+        top.append((img, "입력 (INPUT)", f"{iw}×{ih} · input"))
+    top += [panel(r) for r in openai_rows]
+    bottom = [panel(r) for r in gemini_rows]
+    grid = [r for r in (top, bottom) if r]
 
-    n = len(panels)
-    width = PAD + n * (CELL + PAD)
-    height = HEADER_H + PAD + CELL + CAPTION_H + PAD
+    max_cols = max(len(r) for r in grid)
+    row_h = CELL + CAPTION_H + PAD
+    width = PAD + max_cols * (CELL + PAD)
+    height = HEADER_H + PAD + len(grid) * row_h
     canvas = Image.new("RGB", (width, height), "white")
     draw = ImageDraw.Draw(canvas)
 
@@ -131,25 +168,23 @@ def build_montage(case: dict) -> None:
     for i, ln in enumerate(_wrap(draw, f'프롬프트: "{case["prompt"]}"', prompt_font, width - 2 * PAD)):
         draw.text((PAD, 66 + i * 32), ln, font=prompt_font, fill=(70, 70, 78))
 
-    # 셀
-    y_img = HEADER_H + PAD
-    label_font, sub_font = _font(24, bold=True), _font(20)
-    for i, (path, label, sub) in enumerate(panels):
-        x = PAD + i * (CELL + PAD)
-        canvas.paste(_fit_square(path, CELL), (x, y_img))
-        draw.rectangle([x, y_img, x + CELL, y_img + CELL], outline=LINE, width=2)
-        cx = x + CELL // 2
-        _centered(draw, label, label_font, cx, y_img + CELL + 12, INK)
-        _centered(draw, sub, sub_font, cx, y_img + CELL + 46, SUB)
-
-    # 편집 케이스만 입력(0번)과 결과 사이 구분선
-    if case["type"] == "edit":
-        div_x = PAD + (CELL + PAD) - PAD // 2
-        draw.line([div_x, HEADER_H + PAD // 2, div_x, height - PAD // 2], fill=(180, 180, 188), width=2)
+    # 패널들(좌측 정렬, 줄마다 차례로)
+    label_font, sub_font = _font(22, bold=True), _font(19)
+    y = HEADER_H + PAD
+    for row_panels in grid:
+        for i, (path, label, sub) in enumerate(row_panels):
+            x = PAD + i * (CELL + PAD)
+            canvas.paste(_fit_square(path, CELL), (x, y))
+            draw.rectangle([x, y, x + CELL, y + CELL], outline=LINE, width=2)
+            cx = x + CELL // 2
+            _centered(draw, label, label_font, cx, y + CELL + 10, INK)
+            _centered(draw, sub, sub_font, cx, y + CELL + 42, SUB)
+        y += row_h
 
     out = case_dir / "montage.png"
     canvas.save(out)
-    print(f"뫽타주 저장: {out.relative_to(PROJECT_ROOT)}  ({width}×{height})")
+    rows_desc = "+".join(str(len(r)) for r in grid)
+    print(f"뫽타주 저장: {out.relative_to(PROJECT_ROOT)}  ({width}×{height}, 패널 {rows_desc})")
 
 
 def main() -> None:

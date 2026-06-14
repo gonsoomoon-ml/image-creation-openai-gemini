@@ -10,10 +10,17 @@ type = "edit"
 image = "test_data/cat-scratch.png"
 prompt = "A full-body cute cat based on this simple smiling cat sketch. High-resolution."
 
-# 새 이미지 케이스 예시 — 프롬프트를 실제 값으로 채우고 주석을 해제하세요.
-# [[case]]
-# id = "woman-book-edit"
-# type = "edit"
-# image = "test_data/woman-masking-book.jpg"
-# prompt = "<여기에 편집 프롬프트>"
-# models = ["gemini-3.1-flash-image"]   # 예: 비용 줄이려고 한 모델만
+# 두 번째 케이스 — 얼굴을 가린 책 제거(인페인팅 성격의 편집)
+[[case]]
+id = "woman-book-edit"
+type = "edit"
+image = "test_data/woman-masking-book.jpg"
+prompt = "Remove any objects covering the person's face while maintaining natural facial features"
+# models = ["gemini-3.1-flash-image"]   # 주석 해제 시 이 모델만 실행(비용 절약). 생략 = 3종 전부
+
+# 세 번째 케이스 — 텍스트→이미지 생성(generate). 입력 이미지 없이 프롬프트만.
+# 간판 글자('OPEN') 렌더링 + 사실감/반사 표현으로 세 모델의 품질 차이를 보기 좋음.
+[[case]]
+id = "neon-cafe"
+type = "generate"
+prompt = "A photorealistic cozy coffee shop storefront on a rainy evening, a glowing neon sign that reads 'OPEN', wet pavement reflecting the warm light."

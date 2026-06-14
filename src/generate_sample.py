@@ -17,6 +17,7 @@ import base64
 import json
 import os
 import sys
+import time
 import tomllib
 from io import BytesIO
 from pathlib import Path
@@ -108,8 +109,11 @@ def load_cases() -> list[dict]:
     return cases
 
 
-def generate_openai(model: str, prompt: str, image_path: Path | None, out_dir: Path) -> dict:
-    """OpenAI 이미지. image_path 있으면 편집(images.edit), 없으면 생성(images.generate). 응답은 base64."""
+def generate_openai(model: str, prompt: str, image_path: Path | None, out_dir: Path,
+                    quality: str = "high", label: str | None = None) -> dict:
+    """OpenAI 이미지. image_path 있으면 편집(images.edit), 없으면 생성(images.generate).
+    quality(low|medium|high)는 출력 토큰 수를 바꿔 비용·소요시간을 함께 좌우한다.
+    label 을 주면 그 이름으로 저장(품질 변형 비교용, 예: gpt-image-2-low)."""
     client = OpenAI(api_key=_get_key("OPENAI_API_KEY"))
     if image_path is not None:
         buf = BytesIO()
@@ -119,14 +123,15 @@ def generate_openai(model: str, prompt: str, image_path: Path | None, out_dir: P
         resp = client.images.edit(
             model=model, image=buf, prompt=prompt,
             size="1024x1024",   # gpt-image-2: 1024x1024 / 1536x1024 / 1024x1536 / auto
-            quality="high",     # low | medium | high | auto
+            quality=quality,    # low | medium | high (출력 토큰=비용=속도)
             # 주의: gpt-image-2 에는 input_fidelity 를 쓰지 말 것
         )
     else:
         resp = client.images.generate(
-            model=model, prompt=prompt, size="1024x1024", quality="high",
+            model=model, prompt=prompt, size="1024x1024", quality=quality,
         )
-    out_path = out_dir / f"{model}.png"
+    out_name = label or model
+    out_path = out_dir / f"{out_name}.png"
     out_path.write_bytes(base64.b64decode(resp.data[0].b64_json))
 
     u = resp.usage  # GPT image 모델에만 존재
@@ -154,7 +159,8 @@ def generate_openai(model: str, prompt: str, image_path: Path | None, out_dir: P
         )
     return {
         "provider": "openai",
-        "model": model,
+        "model": out_name,
+        "quality": quality,
         "path": str(out_path.relative_to(PROJECT_ROOT)),
         "input_tokens": u.input_tokens,
         "output_tokens": u.output_tokens,
@@ -227,9 +233,11 @@ def _run_case(case: dict) -> list[dict]:
         fn = PROVIDERS[MODEL_PROVIDER[model]]
         print(f"  [{case['type']}] {cid} · {model} ...")
         try:
+            t0 = time.perf_counter()
             res = fn(model, case["prompt"], image_path, out_dir)
+            res["elapsed_sec"] = round(time.perf_counter() - t0, 2)  # API 호출 포함 전체 소요(초)
             results.append(res)
-            print(f"    → {res['path']}  (예상 비용 {_fmt_cost(res['est_cost_usd'])})")
+            print(f"    → {res['path']}  (비용 {_fmt_cost(res['est_cost_usd'])}, {res['elapsed_sec']}s)")
         except Exception as e:  # noqa: BLE001 - 샘플이므로 셀 단위 실패 격리
             print(f"    [건너뜀] {model}: {e}")
 
@@ -238,6 +246,63 @@ def _run_case(case: dict) -> list[dict]:
             json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8"
         )
     return results
+
+
+OPENAI_QUALITIES = ("low", "medium", "high")
+
+
+def _merge_usage(out_dir: Path, new_results: list[dict]) -> None:
+    """새 결과를 outputs/<id>/usage.json 에 라벨(model) 기준으로 병합(기존 항목 보존)."""
+    path = out_dir / "usage.json"
+    merged: dict[str, dict] = {}
+    if path.exists():
+        for row in json.loads(path.read_text(encoding="utf-8")):
+            merged[row["model"]] = row
+    for res in new_results:
+        merged[res["model"]] = res
+    path.write_text(json.dumps(list(merged.values()), indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _run_quality_sweep(cases: list[dict], qualities: list[str]) -> None:
+    """gpt-image-2 를 여러 quality 로만 돌려 비용·속도를 비교(라벨 <model>-<quality>).
+    다른 모델/기존 결과는 건드리지 않고 usage.json 에 병합한다(재과금 최소화)."""
+    bad = [q for q in qualities if q not in OPENAI_QUALITIES]
+    if bad:
+        print(f"알 수 없는 quality: {bad} (사용 가능: {list(OPENAI_QUALITIES)})")
+        return
+    rows: list[tuple[str, dict]] = []
+    for case in cases:
+        out_dir = OUT_DIR / case["id"]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        image_path = None
+        if case["type"] == "edit":
+            image_path = PROJECT_ROOT / case["image"]
+            if not image_path.exists():
+                print(f"  [건너뜀] {case['id']}: 입력 이미지 없음 {image_path}")
+                continue
+        new: list[dict] = []
+        for q in qualities:
+            label = f"{OPENAI_IMAGE_MODEL}-{q}"
+            print(f"  [openai {q}] {case['id']} · {label} ...")
+            try:
+                t0 = time.perf_counter()
+                res = generate_openai(OPENAI_IMAGE_MODEL, case["prompt"], image_path, out_dir, quality=q, label=label)
+                res["elapsed_sec"] = round(time.perf_counter() - t0, 2)
+                new.append(res)
+                rows.append((case["id"], res))
+                print(f"    → {res['path']}  (비용 {_fmt_cost(res['est_cost_usd'])}, {res['elapsed_sec']}s)")
+            except Exception as e:  # noqa: BLE001 - 셀 단위 실패 격리
+                print(f"    [건너뜀] {label}: {e}")
+        if new:
+            _merge_usage(out_dir, new)
+
+    if not rows:
+        print("\n생성된 결과가 없습니다. .env 의 API 키/케이스 설정을 확인하세요.")
+        return
+    print(f"\n{'case':16}{'quality':9}{'total_tokens':>14}{'est_cost_usd':>14}{'elapsed_sec':>13}")
+    print("-" * 66)
+    for cid, r in rows:
+        print(f"{cid:16}{r.get('quality', ''):9}{r['total_tokens']:>14}{_fmt_cost(r['est_cost_usd']):>14}{r['elapsed_sec']:>13.2f}")
 
 
 def main() -> None:
@@ -261,6 +326,13 @@ def main() -> None:
         cases = [c for c in cases if c["id"] in wanted]
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    # --quality=low,medium : gpt-image-2 만 해당 quality 들로 추가 실행(기존 결과에 병합)
+    quality_csv = next((a.split("=", 1)[1] for a in args if a.startswith("--quality=")), None)
+    if quality_csv:
+        _run_quality_sweep(cases, [q.strip() for q in quality_csv.split(",") if q.strip()])
+        return
+
     rows: list[tuple[str, dict]] = []
     for case in cases:
         print(f"[케이스] {case['id']}")
@@ -270,10 +342,10 @@ def main() -> None:
         print("\n생성된 결과가 없습니다. .env 의 API 키/케이스 설정을 확인하세요.")
         return
 
-    print(f"\n{'case':20}{'model':28}{'total_tokens':>14}{'est_cost_usd':>16}")
-    print("-" * 78)
+    print(f"\n{'case':20}{'model':28}{'total_tokens':>14}{'est_cost_usd':>16}{'elapsed_sec':>14}")
+    print("-" * 92)
     for cid, r in rows:
-        print(f"{cid:20}{r['model']:28}{r['total_tokens']:>14}{_fmt_cost(r['est_cost_usd']):>16}")
+        print(f"{cid:20}{r['model']:28}{r['total_tokens']:>14}{_fmt_cost(r['est_cost_usd']):>16}{r['elapsed_sec']:>14.2f}")
 
 
 if __name__ == "__main__":
