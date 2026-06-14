@@ -1,0 +1,54 @@
+[
+  {
+    "provider": "openai",
+    "model": "gpt-image-2",
+    "path": "outputs/woman-book-edit/gpt-image-2.png",
+    "input_tokens": 313,
+    "output_tokens": 7024,
+    "total_tokens": 7337,
+    "est_cost_usd": 0.2132,
+    "elapsed_sec": 145.01
+  },
+  {
+    "provider": "gemini",
+    "model": "gemini-3-pro-image",
+    "path": "outputs/woman-book-edit/gemini-3-pro-image.png",
+    "prompt_tokens": 273,
+    "candidates_tokens": 1227,
+    "total_tokens": 1650,
+    "est_cost_usd": 0.1349,
+    "elapsed_sec": 15.78
+  },
+  {
+    "provider": "gemini",
+    "model": "gemini-3.1-flash-image",
+    "path": "outputs/woman-book-edit/gemini-3.1-flash-image.png",
+    "prompt_tokens": 273,
+    "candidates_tokens": 1385,
+    "total_tokens": 1658,
+    "est_cost_usd": 0.0673,
+    "elapsed_sec": 9.47
+  },
+  {
+    "provider": "openai",
+    "model": "gpt-image-2-low",
+    "quality": "low",
+    "path": "outputs/woman-book-edit/gpt-image-2-low.png",
+    "input_tokens": 313,
+    "output_tokens": 196,
+    "total_tokens": 509,
+    "est_cost_usd": 0.0083,
+    "elapsed_sec": 16.65
+  },
+  {
+    "provider": "openai",
+    "model": "gpt-image-2-medium",
+    "quality": "medium",
+    "path": "outputs/woman-book-edit/gpt-image-2-medium.png",
+    "input_tokens": 313,
+    "output_tokens": 1756,
+    "total_tokens": 2069,
+    "est_cost_usd": 0.0551,
+    "elapsed_sec": 46.28
+  }
+]

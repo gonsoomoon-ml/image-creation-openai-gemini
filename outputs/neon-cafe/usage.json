@@ -1,0 +1,54 @@
+[
+  {
+    "provider": "openai",
+    "model": "gpt-image-2",
+    "path": "outputs/neon-cafe/gpt-image-2.png",
+    "input_tokens": 36,
+    "output_tokens": 7024,
+    "total_tokens": 7060,
+    "est_cost_usd": 0.2109,
+    "elapsed_sec": 193.63
+  },
+  {
+    "provider": "gemini",
+    "model": "gemini-3-pro-image",
+    "path": "outputs/neon-cafe/gemini-3-pro-image.png",
+    "prompt_tokens": 29,
+    "candidates_tokens": 1242,
+    "total_tokens": 1439,
+    "est_cost_usd": 0.1345,
+    "elapsed_sec": 15.3
+  },
+  {
+    "provider": "gemini",
+    "model": "gemini-3.1-flash-image",
+    "path": "outputs/neon-cafe/gemini-3.1-flash-image.png",
+    "prompt_tokens": 29,
+    "candidates_tokens": 1604,
+    "total_tokens": 1633,
+    "est_cost_usd": 0.0672,
+    "elapsed_sec": 9.51
+  },
+  {
+    "provider": "openai",
+    "model": "gpt-image-2-low",
+    "quality": "low",
+    "path": "outputs/neon-cafe/gpt-image-2-low.png",
+    "input_tokens": 36,
+    "output_tokens": 196,
+    "total_tokens": 232,
+    "est_cost_usd": 0.0061,
+    "elapsed_sec": 18.4
+  },
+  {
+    "provider": "openai",
+    "model": "gpt-image-2-medium",
+    "quality": "medium",
+    "path": "outputs/neon-cafe/gpt-image-2-medium.png",
+    "input_tokens": 36,
+    "output_tokens": 1756,
+    "total_tokens": 1792,
+    "est_cost_usd": 0.0529,
+    "elapsed_sec": 58.2
+  }
+]
